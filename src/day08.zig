@@ -30,8 +30,11 @@ pub fn main() !void {
         try points.append(gpa_alloc, try Point.parse_from_line(line));
     }
 
-    try part1(gpa_alloc, points.items, iter_count);
-    try part2(gpa_alloc, points.items);
+    var distances = try DistanceFinder.init(gpa_alloc, points.items);
+    defer distances.deinit();
+
+    try part1(gpa_alloc, &distances, points.items, iter_count);
+    try part2(gpa_alloc, &distances, points.items);
 }
 
 const Point = struct {
@@ -91,6 +94,10 @@ const DistanceFinder = struct {
         return .{ .distances = Queue.fromOwnedSlice(alloc, distances, {}) };
     }
 
+    fn return_popped(self: *Self, pairs: []const PointPair) void {
+        self.distances.addSlice(pairs) catch unreachable;
+    }
+
     fn deinit(self: *Self) void {
         self.distances.deinit();
     }
@@ -108,14 +115,22 @@ const DistanceFinder = struct {
     }
 };
 
-fn part1(gpa: std.mem.Allocator, points: []const Point, iters: u32) !void {
-    var distances = try DistanceFinder.init(gpa, points);
-    defer distances.deinit();
-
+fn part1(
+    gpa: std.mem.Allocator,
+    distances: *DistanceFinder,
+    points: []const Point,
+    iters: u32,
+) !void {
     var circuits = try gpa.alloc(u16, points.len);
     defer gpa.free(circuits);
     for (0..points.len) |i| {
         circuits[i] = @intCast(i);
+    }
+
+    var best_pairs = try std.ArrayList(DistanceFinder.PointPair).initCapacity(gpa, iters);
+    defer {
+        distances.return_popped(best_pairs.items);
+        best_pairs.deinit(gpa);
     }
 
     for (0..iters) |_| {
@@ -126,6 +141,8 @@ fn part1(gpa: std.mem.Allocator, points: []const Point, iters: u32) !void {
         const parent_circuit = circuits[i];
         const child_circuit = circuits[j];
         _ = update_circuits(circuits, parent_circuit, child_circuit);
+
+        best_pairs.appendAssumeCapacity(pair);
     }
 
     var member_count = try gpa.alloc(u16, points.len);
@@ -163,10 +180,7 @@ fn update_circuits(circuits: []u16, parent: u16, child: u16) enum { connected_al
     return .connected_all;
 }
 
-fn part2(gpa: std.mem.Allocator, points: []const Point) !void {
-    var distances = try DistanceFinder.init(gpa, points);
-    defer distances.deinit();
-
+fn part2(gpa: std.mem.Allocator, distances: *DistanceFinder, points: []const Point) !void {
     var circuits = try gpa.alloc(u16, points.len);
     defer gpa.free(circuits);
     for (0..points.len) |i| {
