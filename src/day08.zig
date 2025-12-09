@@ -73,20 +73,22 @@ const DistanceFinder = struct {
     }
 
     fn init(alloc: std.mem.Allocator, points: []const Point) !Self {
-        var distances = Queue.init(alloc, {});
+        const total_points = points.len * (points.len - 1) / 2;
+        var distances = try alloc.alloc(PointPair, total_points);
 
+        var bi: usize = 0;
         for (points, 0..) |p1, i| {
             for (points[i + 1 ..], (i + 1)..) |p2, j| {
                 const d = p1.dist(&p2);
-
-                try distances.add(.{
+                distances[bi] = .{
                     .i = @intCast(i),
                     .j = @intCast(j),
                     .distance = d,
-                });
+                };
+                bi += 1;
             }
         }
-        return .{ .distances = distances };
+        return .{ .distances = Queue.fromOwnedSlice(alloc, distances, {}) };
     }
 
     fn deinit(self: *Self) void {
