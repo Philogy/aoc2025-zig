@@ -7,14 +7,9 @@ const DIAL_SIZE = 100;
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     defer if (gpa.deinit() == .leak) @panic("leaked memory");
-
     const gpa_alloc = gpa.allocator();
-    var arena = std.heap.ArenaAllocator.init(gpa_alloc);
-    defer arena.deinit();
 
-    const arena_allocator = arena.allocator();
-
-    var args = try std.process.ArgIterator.initWithAllocator(arena_allocator);
+    var args = try std.process.ArgIterator.initWithAllocator(gpa_alloc);
     defer args.deinit();
 
     _ = args.next() orelse @panic("Missing [PATH] argument ");
@@ -84,19 +79,7 @@ fn part2(source: []const u8) !void {
             },
             else => std.debug.panic("Input contained invalid line: \"{s}\"", .{line}),
         }
-
-        // var buf: [32]u8 = undefined;
-        // const padded_line = common.pad_string_left(&buf, line, 4) catch unreachable;
-        // std.debug.print("{s} => {:>3} [{}]\n", .{ padded_line, dial_position, times_reached_zero });
     }
 
     std.debug.print("part2: {}\n", .{times_reached_zero});
-}
-
-test "simple test" {
-    const gpa = std.testing.allocator;
-    var list: std.ArrayList(i32) = .empty;
-    defer list.deinit(gpa); // Try commenting this out and see if zig detects the memory leak!
-    try list.append(gpa, 41);
-    try std.testing.expectEqual(@as(i32, 42), list.pop());
 }

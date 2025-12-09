@@ -2,9 +2,6 @@ const std = @import("std");
 const common = @import("common");
 const Range = common.Range;
 
-const DIAL_START = 50;
-const DIAL_SIZE = 100;
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}).init;
     defer if (gpa.deinit() == .leak) @panic("leaked memory");
