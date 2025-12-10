@@ -135,7 +135,6 @@ const Line = struct {
         }
     }
 
-
     fn max_x(self: Self) u32 {
         return switch (self.direction) {
             .x => self.end,
@@ -321,7 +320,7 @@ const Lines = struct {
         return std.math.order(ray_start, l.get_line(i).max_y());
     }
 
-    fn find_intersecting_fast(self: *const Self, ray: Ray, result_buf: []Intersect) []const Intersect {
+    fn find_intersecting(self: *const Self, ray: Ray, result_buf: []Intersect) []const Intersect {
         var intersects = std.ArrayList(Intersect).initBuffer(result_buf);
 
         const start_offset, const index = switch (ray.direction) {
@@ -345,10 +344,6 @@ const Lines = struct {
             },
         };
 
-        // std.debug.print("==== FAST ====\n", .{});
-        // std.debug.print("  index: {any}\n", .{index});
-        // std.debug.print("  start_offset: {}\n", .{start_offset});
-
         for (index[start_offset..]) |i| {
             const new_line = self.get_line(i);
             const new = Intersect{
@@ -371,60 +366,6 @@ const Lines = struct {
         return intersects.items;
     }
 
-    fn find_intersecting(self: *const Self, ray: Ray, result_buf: []Intersect) []const Intersect {
-        var intersects = std.ArrayList(Intersect).initBuffer(result_buf);
-
-        for (0..self.lines.len) |i| {
-            const new_line = self.get_line(i);
-            const new = Intersect{
-                .line = new_line,
-                .intersect = ray.intersects(new_line) orelse continue,
-            };
-
-            if (intersects.items.len > 0) {
-                const prev = intersects.items[0];
-                switch (std.math.order(new.intersect, prev.intersect)) {
-                    .eq => {},
-                    .lt => intersects.clearRetainingCapacity(),
-                    .gt => continue,
-                }
-            }
-            intersects.appendAssumeCapacity(new);
-        }
-
-        var alt_results_buf: [2]Intersect = undefined;
-        const alt_results = self.find_intersecting_fast(ray, &alt_results_buf);
-        if (intersects.items.len != alt_results.len) {
-            std.debug.print("---------------------\n", .{});
-            for (self.lines, 0..) |line, i| {
-                std.debug.print("  [{}] line: {} (x: {}, y: {}) {{{any}}}\n", .{ i, line, line.max_x(), line.max_y(), ray.intersects(line) });
-            }
-            std.debug.print("alt_results:\n", .{});
-            for (alt_results) |res| {
-                std.debug.print("  {}\n", .{res});
-            }
-            std.debug.print("actual:\n", .{});
-            for (intersects.items) |res| {
-                std.debug.print("  {}\n", .{res});
-            }
-            std.debug.print("ray: {}\n", .{ray});
-            unreachable;
-        } else if (alt_results.len == 1) {
-            std.debug.assert(std.meta.eql(intersects.items[0], alt_results[0]));
-        } else if (alt_results.len == 2) {
-            std.debug.assert( //
-                ( //
-                    std.meta.eql(intersects.items[0], alt_results[0]) //
-                    and std.meta.eql(intersects.items[1], alt_results[1]) //
-                ) or ( //
-                    std.meta.eql(intersects.items[0], alt_results[1]) //
-                    and std.meta.eql(intersects.items[1], alt_results[0]) //
-                ));
-        }
-
-        return intersects.items;
-    }
-
     fn line_in_bounds(self: *const Self, tracer_const: Ray, line_end: u32) bool {
         var results_buf: [2]Intersect = undefined;
 
@@ -434,7 +375,7 @@ const Lines = struct {
                 return true;
             }
 
-            const intersects = self.find_intersecting_fast(tracer, &results_buf);
+            const intersects = self.find_intersecting(tracer, &results_buf);
             if (intersects.len == 0) return false;
 
             var new_start = tracer.start + 1;
