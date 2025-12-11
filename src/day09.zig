@@ -135,6 +135,20 @@ const Line = struct {
         }
     }
 
+    fn min_x(self: Self) u32 {
+        return switch (self.direction) {
+            .x => self.start,
+            .y => self.plane,
+        };
+    }
+
+    fn min_y(self: Self) u32 {
+        return switch (self.direction) {
+            .x => self.plane,
+            .y => self.start,
+        };
+    }
+
     fn max_x(self: Self) u32 {
         return switch (self.direction) {
             .x => self.end,
@@ -176,12 +190,18 @@ const Lines = struct {
     alloc: std.mem.Allocator,
     x_index: []u16,
     y_index: []u16,
+    x_min_index: []u16,
+    y_min_index: []u16,
+
+    last_v2_offset: usize = undefined,
 
     const Self = @This();
 
     fn init(alloc: std.mem.Allocator, points: []const Point) !Self {
         const x_index = try alloc.alloc(u16, points.len);
         const y_index = try alloc.alloc(u16, points.len);
+        const x_min_index = try alloc.alloc(u16, points.len);
+        const y_min_index = try alloc.alloc(u16, points.len);
         const inner_lines = blk: {
             var inner_lines = try alloc.alloc(Line, points.len);
             var li: usize = 0;
@@ -198,6 +218,8 @@ const Lines = struct {
             .alloc = alloc,
             .x_index = x_index,
             .y_index = y_index,
+            .x_min_index = x_min_index,
+            .y_min_index = y_min_index,
         };
 
         lines.build_indices();
@@ -215,14 +237,26 @@ const Lines = struct {
         return self.get_line(lhs).max_y() < self.get_line(rhs).max_y();
     }
 
+    fn build_line_less_than(comptime line_attr: fn (Line) u32) fn (*Self, u16, u16) bool {
+        return struct {
+            fn inner(self: *Self, lhs: u16, rhs: u16) bool {
+                return line_attr(self.get_line(lhs)) < line_attr(self.get_line(rhs));
+            }
+        }.inner;
+    }
+
     fn build_indices(self: *Self) void {
         for (0..self.lines.len) |i| {
             self.x_index[i] = @intCast(i);
             self.y_index[i] = @intCast(i);
+            self.x_min_index[i] = @intCast(i);
+            self.y_min_index[i] = @intCast(i);
         }
 
-        std.sort.pdq(u16, self.x_index, self, furthest_x_less_than);
-        std.sort.pdq(u16, self.y_index, self, furthest_y_less_than);
+        std.sort.pdq(u16, self.x_index, self, build_line_less_than(Line.max_x));
+        std.sort.pdq(u16, self.y_index, self, build_line_less_than(Line.max_y));
+        std.sort.pdq(u16, self.x_min_index, self, build_line_less_than(Line.min_x));
+        std.sort.pdq(u16, self.y_min_index, self, build_line_less_than(Line.min_y));
     }
 
     fn map_line_insideness(self: *Self, bounding_box: Rectangle) void {
@@ -276,6 +310,8 @@ const Lines = struct {
     fn deinit(self: *Self) void {
         self.alloc.free(self.x_index);
         self.alloc.free(self.y_index);
+        self.alloc.free(self.x_min_index);
+        self.alloc.free(self.y_min_index);
         self.alloc.free(self.lines);
         self.lines = undefined;
         self.x_index = undefined;
@@ -320,62 +356,56 @@ const Lines = struct {
         return std.math.order(ray_start, l.get_line(i).max_y());
     }
 
-    fn find_intersecting(self: *const Self, ray: Ray, result_buf: []Intersect) []const Intersect {
+    fn find_intersecting(
+        self: *Self,
+        ray: Ray,
+        result_buf: []Intersect,
+        index_offset: usize,
+    ) struct { []const Intersect, usize } {
         var intersects = std.ArrayList(Intersect).initBuffer(result_buf);
-
-        const start_offset, const index = switch (ray.direction) {
-            .x => .{
-                std.sort.lowerBound(
-                    u16,
-                    self.x_index,
-                    .{ self, ray.start },
-                    compare_x_index,
-                ),
-                self.x_index,
-            },
-            .y => .{
-                std.sort.lowerBound(
-                    u16,
-                    self.y_index,
-                    .{ self, ray.start },
-                    compare_y_index,
-                ),
-                self.y_index,
-            },
+        const index = switch (ray.direction) {
+            .x => self.x_min_index,
+            .y => self.y_min_index,
         };
 
-        for (index[start_offset..]) |i| {
+        var new_index_offset = index_offset;
+        for (index[index_offset..], index_offset..) |i, ii| {
             const new_line = self.get_line(i);
             const new = Intersect{
                 .line = new_line,
                 .intersect = ray.intersects(new_line) orelse continue,
             };
-
             if (intersects.items.len > 0) {
                 const prev = intersects.items[0];
                 switch (std.math.order(new.intersect, prev.intersect)) {
-                    .eq => {},
-                    .lt => intersects.clearRetainingCapacity(),
-                    .gt => continue,
+                    .eq => intersects.appendAssumeCapacity(new),
+                    .lt => unreachable, // min index should guarantee <= intersect ordering.
+                    .gt => break,
                 }
+            } else {
+                new_index_offset = ii;
+                intersects.appendAssumeCapacity(new);
             }
-
-            intersects.appendAssumeCapacity(new);
+        } else {
+            new_index_offset = index.len;
         }
 
-        return intersects.items;
+        return .{ intersects.items, new_index_offset };
     }
 
-    fn line_in_bounds(self: *const Self, tracer_const: Ray, line_end: u32) bool {
+    fn line_in_bounds(self: *Self, tracer_const: Ray, line_end: u32) bool {
+        self.last_v2_offset = 0;
         var results_buf: [2]Intersect = undefined;
 
         var tracer = tracer_const;
+        var index_offset: usize = 0;
         for (0..100000) |_| {
             if (tracer.start >= line_end) {
                 return true;
             }
 
-            const intersects = self.find_intersecting(tracer, &results_buf);
+            const intersects, index_offset = self.find_intersecting(tracer, &results_buf, index_offset);
+
             if (intersects.len == 0) return false;
 
             var new_start = tracer.start + 1;
@@ -396,7 +426,7 @@ const Lines = struct {
         unreachable; // likely infinite loop.
     }
 
-    fn rect_in_bounds(self: *const Self, p1: Point, p2: Point) bool {
+    fn rect_in_bounds(self: *Self, p1: Point, p2: Point) bool {
         const x1 = @min(p1.x, p2.x);
         const y1 = @min(p1.y, p2.y);
         const x2 = @max(p1.x, p2.x);
