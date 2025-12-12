@@ -70,7 +70,7 @@ pub fn build(b: *std.Build) void {
         .strip = strip,
     };
 
-    const DAYS = 9;
+    const DAYS = 10;
     for (1..DAYS + 1) |day| {
         add_day(b, @intCast(day), options);
     }
