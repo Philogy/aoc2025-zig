@@ -31,21 +31,9 @@ pub fn main() !void {
         }
     }
     const points = points_list.items;
-    var pairs_by_area = blk: {
-        var pairs = try gpa_alloc.alloc(PointPair, points.len * (points.len - 1) / 2);
-        var pi: usize = 0;
-        for (0..points.len) |i| {
-            for (i + 1..points.len) |j| {
-                pairs[pi] = .{ .i = @intCast(i), .j = @intCast(j) };
-                pi += 1;
-            }
-        }
-        break :blk Queue.fromOwnedSlice(gpa_alloc, pairs, points);
-    };
-    defer pairs_by_area.deinit();
 
-    try part1(&pairs_by_area, points);
-    try part2(gpa_alloc, &pairs_by_area, points);
+    try part1(points);
+    try part2(gpa_alloc, points);
 }
 
 const Point = struct {
@@ -62,32 +50,15 @@ const Point = struct {
         const y = try std.fmt.parseInt(u32, ystr, 10);
         return .{ .x = x, .y = y };
     }
+
+    fn area(self: Self, other: Self) u64 {
+        return (diff(self.x, other.x) + 1) * (diff(self.y, other.y) + 1);
+    }
 };
 
 fn diff(a: u32, b: u32) u64 {
     return @intCast(if (a > b) a - b else b - a);
 }
-
-const PointPair = struct {
-    i: u16,
-    j: u16,
-
-    const Self = @This();
-
-    fn area(self: Self, points: []const Point) u64 {
-        const a = points[self.i];
-        const b = points[self.j];
-        return (diff(a.x, b.x) + 1) * (diff(a.y, b.y) + 1);
-    }
-
-    fn cmp_pair_area(points: []const Point, a: Self, b: Self) std.math.Order {
-        const area_a = a.area(points);
-        const area_b = b.area(points);
-        return std.math.order(area_a, area_b).invert();
-    }
-};
-
-const Queue = std.PriorityQueue(PointPair, []const Point, PointPair.cmp_pair_area);
 
 const Sign = enum {
     pos,
@@ -356,14 +327,12 @@ const Lines = struct {
         intersect: u32,
     };
 
-    fn find_intersecting(
+    fn fetch_index(
         self: *const Self,
-        ray: Ray,
         ray_direction: Axis,
         line_direction: Axis,
-        index_offset: usize,
-    ) struct { ?Intersect, usize } {
-        const index = switch (line_direction) {
+    ) []const Line {
+        return switch (line_direction) {
             .x => switch (ray_direction) {
                 .x => self.x_lines_minx_sorted,
                 .y => self.x_lines_miny_sorted,
@@ -373,6 +342,16 @@ const Lines = struct {
                 .y => self.y_lines_miny_sorted,
             },
         };
+    }
+
+    fn find_intersecting(
+        self: *const Self,
+        ray: Ray,
+        ray_direction: Axis,
+        line_direction: Axis,
+        index_offset: usize,
+    ) struct { ?Intersect, usize } {
+        const index = self.fetch_index(ray_direction, line_direction);
 
         for (index[index_offset..], index_offset..) |line, i| {
             const maybe_intersect = if (ray_direction == line_direction)
@@ -476,22 +455,31 @@ const Rectangle = struct {
     y2: u32,
 };
 
-fn part1(pairs_by_area: *Queue, points: []const Point) !void {
-    const largest_area = pairs_by_area.peek().?.area(points);
-    std.debug.print("part1: {}\n", .{largest_area});
+fn part1(points: []const Point) !void {
+    var best_area: u64 = 0;
+    for (points, 0..) |p1, i| {
+        for (points[i + 1 ..]) |p2| {
+            best_area = @max(best_area, p1.area(p2));
+        }
+    }
+
+    std.debug.print("part1: {}\n", .{best_area});
 }
 
-fn part2(gpa: std.mem.Allocator, points_by_area: *Queue, points: []const Point) !void {
+fn part2(gpa: std.mem.Allocator, points: []const Point) !void {
     var lines = try Lines.init(gpa, points);
     defer lines.deinit();
 
-    const best_area = while (points_by_area.removeOrNull()) |pair| {
-        if (lines.rect_in_bounds(points[pair.i], points[pair.j])) {
-            break pair.area(points);
+    var best_area: u64 = 0;
+    for (points, 0..) |p1, i| {
+        for (points[i + 1 ..]) |p2| {
+            const new_area = p1.area(p2);
+            if (new_area <= best_area) continue;
+            if (lines.rect_in_bounds(p1, p2)) {
+                best_area = new_area;
+            }
         }
-    } else {
-        return error.NoRectangleFound;
-    };
+    }
 
     std.debug.print("part2: {}\n", .{best_area});
 }
