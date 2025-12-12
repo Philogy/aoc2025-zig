@@ -359,18 +359,18 @@ const Lines = struct {
     fn find_intersecting(
         self: *const Self,
         ray: Ray,
-        comptime ray_direction: Axis,
-        comptime line_direction: Axis,
+        ray_direction: Axis,
+        line_direction: Axis,
         index_offset: usize,
     ) struct { ?Intersect, usize } {
         const index = switch (line_direction) {
-            inline .x => switch (ray_direction) {
-                inline .x => self.x_lines_minx_sorted,
-                inline .y => self.x_lines_miny_sorted,
+            .x => switch (ray_direction) {
+                .x => self.x_lines_minx_sorted,
+                .y => self.x_lines_miny_sorted,
             },
-            inline .y => switch (ray_direction) {
-                inline .x => self.y_lines_minx_sorted,
-                inline .y => self.y_lines_miny_sorted,
+            .y => switch (ray_direction) {
+                .x => self.y_lines_minx_sorted,
+                .y => self.y_lines_miny_sorted,
             },
         };
 
@@ -388,18 +388,10 @@ const Lines = struct {
 
     fn line_in_bounds(
         self: *const Self,
-        comptime tracer_direction: Axis,
+        tracer_direction: Axis,
         tracer_const: Ray,
         line_end: u32,
-        verbose: bool,
     ) bool {
-        if (verbose) std.debug.print("tracer: {} ({}) {} -> {}\n", .{
-            tracer_const.plane,
-            tracer_direction,
-            tracer_const.start,
-            line_end,
-        });
-
         var tracer = tracer_const;
         var parallel_index_offset: usize = 0;
         var perpendicular_index_offset: usize = 0;
@@ -422,9 +414,6 @@ const Lines = struct {
                     tracer_direction.flip(),
                     perpendicular_index_offset,
                 );
-            if (verbose) std.debug.print("  - {}\n", .{tracer.start});
-            if (verbose) std.debug.print("  para: {any}\n", .{parallel_intersect});
-            if (verbose) std.debug.print("  perp: {any}\n", .{perpendicular_interesect});
 
             if (parallel_intersect == null and perpendicular_interesect == null) return false;
             var new_start = tracer.start + 1;
@@ -472,21 +461,11 @@ const Lines = struct {
         const high_y: Ray = .{ .plane = x2, .start = y1 };
 
         const in_bounds = ( //
-            self.line_in_bounds(.x, low_x, x2, false) //
-            and self.line_in_bounds(.y, low_y, y2, false) //
-            and self.line_in_bounds(.x, high_x, x2, false) //
-            and self.line_in_bounds(.y, high_y, y2, false) //
+            self.line_in_bounds(.x, low_x, x2) //
+            and self.line_in_bounds(.y, low_y, y2) //
+            and self.line_in_bounds(.x, high_x, x2) //
+            and self.line_in_bounds(.y, high_y, y2) //
         );
-
-        // if (in_bounds) {
-        //     std.debug.print("==================\n", .{});
-        //     std.debug.print("RECT_IN_BOUNDS ({},{} x {},{}) [{}]\n", .{ x1, y1, x2, y2, (x2 - x1 + 1) * (y2 - y1 + 1) });
-        //
-        //     _ = self.line_in_bounds(.x, low_x, x2, true);
-        //     _ = self.line_in_bounds(.y, low_y, y2, true);
-        //     _ = self.line_in_bounds(.x, high_x, x2, true);
-        //     _ = self.line_in_bounds(.y, high_y, y2, true);
-        // }
 
         return in_bounds;
     }
