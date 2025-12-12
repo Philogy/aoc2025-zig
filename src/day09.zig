@@ -103,10 +103,21 @@ const Sign = enum {
     }
 };
 
-const Axis = enum { x, y };
+const Axis = enum {
+    x,
+    y,
+
+    const Self = @This();
+
+    fn flip(self: Self) Self {
+        return switch (self) {
+            .x => .y,
+            .y => .x,
+        };
+    }
+};
 
 const Line = struct {
-    direction: Axis,
     inside: Sign,
     plane: u32,
     start: u32,
@@ -114,25 +125,31 @@ const Line = struct {
 
     const Self = @This();
 
-    fn from_points(p1: Point, p2: Point) Self {
+    fn from_points(p1: Point, p2: Point) struct { Self, Axis } {
         if (p1.y == p2.y) {
-            return .{
-                .direction = .x,
+            return .{ .{
                 .inside = undefined,
                 .plane = p1.y,
                 .start = @min(p1.x, p2.x),
                 .end = @max(p1.x, p2.x),
-            };
+            }, .x };
         } else {
             std.debug.assert(p1.x == p2.x);
-            return .{
-                .direction = .y,
+            return .{ .{
                 .inside = undefined,
                 .plane = p1.x,
                 .start = @min(p1.y, p2.y),
                 .end = @max(p1.y, p2.y),
-            };
+            }, .y };
         }
+    }
+
+    fn get_plane(self: Self) u32 {
+        return self.plane;
+    }
+
+    fn get_start(self: Self) u32 {
+        return self.start;
     }
 
     fn min_x(self: Self) u32 {
@@ -148,36 +165,21 @@ const Line = struct {
             .y => self.start,
         };
     }
-
-    fn max_x(self: Self) u32 {
-        return switch (self.direction) {
-            .x => self.end,
-            .y => self.plane,
-        };
-    }
-
-    fn max_y(self: Self) u32 {
-        return switch (self.direction) {
-            .x => self.plane,
-            .y => self.end,
-        };
-    }
 };
 
-/// Ray flying infinitely in positive direction if its `direction`.
 const Ray = struct {
-    direction: Axis,
     plane: u32,
     start: u32,
 
     const Self = @This();
 
-    fn intersects(self: Self, line: Line) ?u32 {
-        if (line.direction == self.direction) {
-            if (self.plane != line.plane) return null;
-            if (line.end < self.start) return null;
-            return @max(self.start, line.start);
-        }
+    fn intersects_parallel(self: Self, line: Line) ?u32 {
+        if (self.plane != line.plane) return null;
+        if (line.end < self.start) return null;
+        return @max(self.start, line.start);
+    }
+
+    fn intersects_perpendicular(self: Self, line: Line) ?u32 {
         if (line.plane < self.start) return null;
         if (self.plane < line.start) return null;
         if (self.plane > line.end) return null;
@@ -186,122 +188,144 @@ const Ray = struct {
 };
 
 const Lines = struct {
-    lines: []Line,
+    x_lines_minx_sorted: []Line,
+    y_lines_minx_sorted: []Line,
+    y_lines_miny_sorted: []Line,
+    x_lines_miny_sorted: []Line,
+
     alloc: std.mem.Allocator,
-    x_min_index: []u16,
-    y_min_index: []u16,
 
     const Self = @This();
 
+    fn end_ptr(slice: anytype) [*]const (@typeInfo(@TypeOf(slice)).pointer.child) {
+        const Child = @typeInfo(@TypeOf(slice)).pointer.child;
+        const expected_slice: [*]const Child = slice.ptr;
+        return expected_slice[slice.len..];
+    }
+
     fn init(alloc: std.mem.Allocator, points: []const Point) !Self {
-        const x_min_index = try alloc.alloc(u16, points.len);
-        const y_min_index = try alloc.alloc(u16, points.len);
-        const inner_lines = blk: {
-            var inner_lines = try alloc.alloc(Line, points.len);
-            var li: usize = 0;
-            for (points, 0..) |p1, i| {
-                const p2 = points[(i + 1) % points.len];
-                inner_lines[li] = .from_points(p1, p2);
-                li += 1;
-            }
-            break :blk inner_lines;
-        };
+        const all_lines = try alloc.alloc(Line, points.len * 2);
+
+        var x_lines = std.ArrayList(Line).initBuffer(all_lines[0..points.len]);
+        var y_lines = std.ArrayList(Line).initBuffer(all_lines[points.len..]);
+
+        classify_lines(&x_lines, &y_lines, points);
+
+        const x_lines_minx_sorted = x_lines.items;
+        const y_lines_minx_sorted = all_lines[x_lines.items.len..points.len];
+        const y_lines_miny_sorted = y_lines.items;
+        const x_lines_miny_sorted = all_lines[points.len + y_lines.items.len ..];
+        @memcpy(y_lines_minx_sorted, y_lines_miny_sorted);
+        @memcpy(x_lines_miny_sorted, x_lines_minx_sorted);
+
+        std.debug.assert( //
+            0 //
+            + x_lines_minx_sorted.len //
+            + x_lines_miny_sorted.len //
+            + y_lines_minx_sorted.len //
+            + y_lines_miny_sorted.len //
+            == points.len * 2 //
+        );
+        std.debug.assert(x_lines_minx_sorted.ptr == all_lines.ptr);
+        std.debug.assert(end_ptr(x_lines_minx_sorted) == y_lines_minx_sorted.ptr);
+        std.debug.assert(end_ptr(y_lines_minx_sorted) == y_lines_miny_sorted.ptr);
+        std.debug.assert(end_ptr(y_lines_miny_sorted) == x_lines_miny_sorted.ptr);
 
         var lines: Self = .{
-            .lines = inner_lines,
             .alloc = alloc,
-            .x_min_index = x_min_index,
-            .y_min_index = y_min_index,
+            .x_lines_minx_sorted = x_lines_minx_sorted,
+            .y_lines_minx_sorted = y_lines_minx_sorted,
+            .y_lines_miny_sorted = y_lines_miny_sorted,
+            .x_lines_miny_sorted = x_lines_miny_sorted,
         };
 
         lines.build_indices();
-        const bounding_box = get_bounding_box(points);
-        lines.map_line_insideness(bounding_box);
 
         return lines;
     }
 
-    fn furthest_x_less_than(self: *Self, lhs: u16, rhs: u16) bool {
-        return self.get_line(lhs).max_x() < self.get_line(rhs).max_x();
-    }
-
-    fn furthest_y_less_than(self: *Self, lhs: u16, rhs: u16) bool {
-        return self.get_line(lhs).max_y() < self.get_line(rhs).max_y();
-    }
-
-    fn build_line_less_than(comptime line_attr: fn (Line) u32) fn (*Self, u16, u16) bool {
+    fn line_less_than(comptime line_attr: fn (Line) u32) fn (void, Line, Line) bool {
         return struct {
-            fn inner(self: *Self, lhs: u16, rhs: u16) bool {
-                return line_attr(self.get_line(lhs)) < line_attr(self.get_line(rhs));
+            fn inner(_: void, lhs: Line, rhs: Line) bool {
+                return line_attr(lhs) < line_attr(rhs);
             }
         }.inner;
     }
 
-    fn build_indices(self: *Self) void {
-        for (0..self.lines.len) |i| {
-            self.x_min_index[i] = @intCast(i);
-            self.y_min_index[i] = @intCast(i);
-        }
-
-        std.sort.pdq(u16, self.x_min_index, self, build_line_less_than(Line.min_x));
-        std.sort.pdq(u16, self.y_min_index, self, build_line_less_than(Line.min_y));
-    }
-
-    fn map_line_insideness(self: *Self, bounding_box: Rectangle) void {
-        var last_line: Line, const index = for (0..self.lines.len) |i| {
-            const line = self.get_line(i);
-            switch (line.direction) {
+    fn classify_lines(x_lines: *std.ArrayList(Line), y_lines: *std.ArrayList(Line), points: []const Point) void {
+        const bounding_box = get_bounding_box(points);
+        const start_index, var last_inside: Sign, var last_line, var last_direction = for (points, 0..) |p1, i| {
+            const p2 = points[(i + 1) % points.len];
+            const line, const direction = Line.from_points(p1, p2);
+            switch (direction) {
                 .x => {
                     if (line.plane == bounding_box.y1) {
-                        self.lines[i].inside = .pos;
-                        break .{ line, i };
+                        break .{ i, .pos, line, direction };
                     }
                     if (line.plane == bounding_box.y2) {
-                        self.lines[i].inside = .neg;
-                        break .{ line, i };
+                        break .{ i, .neg, line, direction };
                     }
                 },
                 .y => {
                     if (line.plane == bounding_box.x1) {
-                        self.lines[i].inside = .pos;
-                        break .{ line, i };
+                        break .{ i, .pos, line, direction };
                     }
                     if (line.plane == bounding_box.x2) {
-                        self.lines[i].inside = .neg;
-                        break .{ line, i };
+                        break .{ i, .neg, line, direction };
                     }
                 },
             }
         } else unreachable;
 
-        var last_index: usize = index;
+        last_line.inside = last_inside;
+        switch (last_direction) {
+            .x => x_lines.appendAssumeCapacity(last_line),
+            .y => y_lines.appendAssumeCapacity(last_line),
+        }
 
-        for (1..self.lines.len) |di| {
-            const i = (index + di) % self.lines.len;
-            defer last_index = i;
-            const line = self.get_line(i);
+        for (1..points.len) |di| {
+            const i = (start_index + di) % points.len;
+            const j = (i + 1) % points.len;
+            var line, const direction = Line.from_points(points[i], points[j]);
             defer last_line = line;
+            defer last_direction = direction;
 
-            const last_inside = self.lines[last_index].inside;
-            if (last_line.direction == line.direction) {
-                self.lines[i].inside = last_inside;
+            if (last_direction == direction) {
+                line.inside = last_inside;
+            } else if ((last_line.start == line.plane) == (last_line.plane == line.start)) {
+                line.inside = last_inside;
             } else {
-                if ((last_line.start == line.plane) == (last_line.plane == line.start)) {
-                    self.lines[i].inside = last_inside;
-                } else {
-                    self.lines[i].inside = last_inside.flip();
-                }
+                line.inside = last_inside.flip();
+            }
+            defer last_inside = line.inside;
+
+            switch (direction) {
+                .x => x_lines.appendAssumeCapacity(line),
+                .y => y_lines.appendAssumeCapacity(line),
             }
         }
     }
 
+    fn build_indices(self: *Self) void {
+        std.sort.pdq(Line, self.x_lines_minx_sorted, {}, line_less_than(Line.get_start));
+        std.sort.pdq(Line, self.x_lines_miny_sorted, {}, line_less_than(Line.get_plane));
+        std.sort.pdq(Line, self.y_lines_minx_sorted, {}, line_less_than(Line.get_plane));
+        std.sort.pdq(Line, self.y_lines_miny_sorted, {}, line_less_than(Line.get_start));
+    }
+
     fn deinit(self: *Self) void {
-        self.alloc.free(self.x_min_index);
-        self.alloc.free(self.y_min_index);
-        self.alloc.free(self.lines);
-        self.lines = undefined;
-        self.x_min_index = undefined;
-        self.y_min_index = undefined;
+        const all_lines = self.x_lines_minx_sorted.ptr[0 .. //
+            self.x_lines_minx_sorted.len //
+            + self.y_lines_minx_sorted.len //
+            + self.y_lines_miny_sorted.len //
+            + self.x_lines_miny_sorted.len //
+            ];
+        self.alloc.free(all_lines);
+
+        self.x_lines_minx_sorted = undefined;
+        self.y_lines_minx_sorted = undefined;
+        self.y_lines_miny_sorted = undefined;
+        self.x_lines_miny_sorted = undefined;
     }
 
     fn get_line(self: *const Self, i: usize) Line {
@@ -328,83 +352,108 @@ const Lines = struct {
     }
 
     const Intersect = struct {
-        line: Line,
+        wall: Line,
         intersect: u32,
     };
-
-    fn compare_x_index(ctx: struct { *const Self, u32 }, i: u16) std.math.Order {
-        const l, const ray_start = ctx;
-        return std.math.order(ray_start, l.get_line(i).max_x());
-    }
-
-    fn compare_y_index(ctx: struct { *const Self, u32 }, i: u16) std.math.Order {
-        const l, const ray_start = ctx;
-        return std.math.order(ray_start, l.get_line(i).max_y());
-    }
 
     fn find_intersecting(
         self: *const Self,
         ray: Ray,
-        result_buf: []Intersect,
+        comptime ray_direction: Axis,
+        comptime line_direction: Axis,
         index_offset: usize,
-    ) struct { []const Intersect, usize } {
-        var intersects = std.ArrayList(Intersect).initBuffer(result_buf);
-        const index = switch (ray.direction) {
-            .x => self.x_min_index,
-            .y => self.y_min_index,
+    ) struct { ?Intersect, usize } {
+        const index = switch (line_direction) {
+            inline .x => switch (ray_direction) {
+                inline .x => self.x_lines_minx_sorted,
+                inline .y => self.x_lines_miny_sorted,
+            },
+            inline .y => switch (ray_direction) {
+                inline .x => self.y_lines_minx_sorted,
+                inline .y => self.y_lines_miny_sorted,
+            },
         };
 
-        var new_index_offset = index_offset;
-        for (index[index_offset..], index_offset..) |i, ii| {
-            const new_line = self.get_line(i);
-            const new = Intersect{
-                .line = new_line,
-                .intersect = ray.intersects(new_line) orelse continue,
-            };
-            if (intersects.items.len > 0) {
-                const prev = intersects.items[0];
-                switch (std.math.order(new.intersect, prev.intersect)) {
-                    .eq => intersects.appendAssumeCapacity(new),
-                    .lt => unreachable, // min index should guarantee <= intersect ordering.
-                    .gt => break,
-                }
-            } else {
-                new_index_offset = ii;
-                intersects.appendAssumeCapacity(new);
-            }
-        } else {
-            new_index_offset = index.len;
+        for (index[index_offset..], index_offset..) |line, i| {
+            const maybe_intersect = if (ray_direction == line_direction)
+                ray.intersects_parallel(line)
+            else
+                ray.intersects_perpendicular(line);
+            const intersect = maybe_intersect orelse continue;
+            return .{ .{ .wall = line, .intersect = intersect }, i };
         }
 
-        return .{ intersects.items, new_index_offset };
+        return .{ null, index.len };
     }
 
-    fn line_in_bounds(self: *const Self, tracer_const: Ray, line_end: u32) bool {
-        var results_buf: [2]Intersect = undefined;
+    fn line_in_bounds(
+        self: *const Self,
+        comptime tracer_direction: Axis,
+        tracer_const: Ray,
+        line_end: u32,
+        verbose: bool,
+    ) bool {
+        if (verbose) std.debug.print("tracer: {} ({}) {} -> {}\n", .{
+            tracer_const.plane,
+            tracer_direction,
+            tracer_const.start,
+            line_end,
+        });
 
         var tracer = tracer_const;
-        var index_offset: usize = 0;
+        var parallel_index_offset: usize = 0;
+        var perpendicular_index_offset: usize = 0;
         for (0..100000) |_| {
             if (tracer.start >= line_end) {
                 return true;
             }
 
-            const intersects, index_offset = self.find_intersecting(tracer, &results_buf, index_offset);
+            const parallel_intersect, const new_parallel_index_offset = //
+                self.find_intersecting(
+                    tracer,
+                    tracer_direction,
+                    tracer_direction,
+                    parallel_index_offset,
+                );
+            const perpendicular_interesect, const new_perpendicular_index_offset = //
+                self.find_intersecting(
+                    tracer,
+                    tracer_direction,
+                    tracer_direction.flip(),
+                    perpendicular_index_offset,
+                );
+            if (verbose) std.debug.print("  - {}\n", .{tracer.start});
+            if (verbose) std.debug.print("  para: {any}\n", .{parallel_intersect});
+            if (verbose) std.debug.print("  perp: {any}\n", .{perpendicular_interesect});
 
-            if (intersects.len == 0) return false;
-
+            if (parallel_intersect == null and perpendicular_interesect == null) return false;
             var new_start = tracer.start + 1;
-            for (intersects) |intersect| {
-                const wall = intersect.line;
-                if (wall.direction == tracer.direction) {
-                    new_start = @max(new_start, wall.end);
-                } else {
-                    new_start = @max(new_start, wall.plane);
-                    if (tracer.start < wall.plane and wall.inside != .neg) {
-                        return false;
-                    }
+
+            const which_todo: enum { both, only_parallel, only_perpendicular } = which_todo: {
+                const parallel = parallel_intersect orelse break :which_todo .both;
+                const perpendicular = perpendicular_interesect orelse break :which_todo .both;
+                break :which_todo switch (std.math.order(parallel.intersect, perpendicular.intersect)) {
+                    .eq => .both,
+                    .lt => .only_parallel,
+                    .gt => .only_perpendicular,
+                };
+            };
+
+            if (which_todo != .only_perpendicular) {
+                if (parallel_intersect) |intersect| {
+                    new_start = @max(new_start, intersect.wall.end);
                 }
+                parallel_index_offset = new_parallel_index_offset;
             }
+            if (which_todo != .only_parallel) {
+                if (perpendicular_interesect) |intersect| {
+                    const wall = intersect.wall;
+                    if (tracer.start < wall.plane and wall.inside == .pos) return false;
+                    new_start = @max(new_start, wall.plane);
+                }
+                perpendicular_index_offset = new_perpendicular_index_offset;
+            }
+
             tracer.start = new_start;
         }
 
@@ -417,15 +466,29 @@ const Lines = struct {
         const x2 = @max(p1.x, p2.x);
         const y2 = @max(p1.y, p2.y);
 
-        const low_x: Ray = .{ .direction = .x, .plane = y1, .start = x1 };
-        const low_y: Ray = .{ .direction = .y, .plane = x1, .start = y1 };
-        const high_x: Ray = .{ .direction = .x, .plane = y2, .start = x1 };
-        const high_y: Ray = .{ .direction = .y, .plane = x2, .start = y1 };
+        const low_x: Ray = .{ .plane = y1, .start = x1 };
+        const low_y: Ray = .{ .plane = x1, .start = y1 };
+        const high_x: Ray = .{ .plane = y2, .start = x1 };
+        const high_y: Ray = .{ .plane = x2, .start = y1 };
 
-        return (self.line_in_bounds(low_x, x2) //
-            and self.line_in_bounds(low_y, y2) //
-            and self.line_in_bounds(high_x, x2) //
-            and self.line_in_bounds(high_y, y2));
+        const in_bounds = ( //
+            self.line_in_bounds(.x, low_x, x2, false) //
+            and self.line_in_bounds(.y, low_y, y2, false) //
+            and self.line_in_bounds(.x, high_x, x2, false) //
+            and self.line_in_bounds(.y, high_y, y2, false) //
+        );
+
+        // if (in_bounds) {
+        //     std.debug.print("==================\n", .{});
+        //     std.debug.print("RECT_IN_BOUNDS ({},{} x {},{}) [{}]\n", .{ x1, y1, x2, y2, (x2 - x1 + 1) * (y2 - y1 + 1) });
+        //
+        //     _ = self.line_in_bounds(.x, low_x, x2, true);
+        //     _ = self.line_in_bounds(.y, low_y, y2, true);
+        //     _ = self.line_in_bounds(.x, high_x, x2, true);
+        //     _ = self.line_in_bounds(.y, high_y, y2, true);
+        // }
+
+        return in_bounds;
     }
 };
 
