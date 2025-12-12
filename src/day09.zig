@@ -400,14 +400,14 @@ const Lines = struct {
                 return true;
             }
 
-            const parallel_intersect, const new_parallel_index_offset = //
+            const parallel_intersect, parallel_index_offset = //
                 self.find_intersecting(
                     tracer,
                     tracer_direction,
                     tracer_direction,
                     parallel_index_offset,
                 );
-            const perpendicular_interesect, const new_perpendicular_index_offset = //
+            const perpendicular_interesect, perpendicular_index_offset = //
                 self.find_intersecting(
                     tracer,
                     tracer_direction,
@@ -432,7 +432,6 @@ const Lines = struct {
                 if (parallel_intersect) |intersect| {
                     new_start = @max(new_start, intersect.wall.end);
                 }
-                parallel_index_offset = new_parallel_index_offset;
             }
             if (which_todo != .only_parallel) {
                 if (perpendicular_interesect) |intersect| {
@@ -440,7 +439,6 @@ const Lines = struct {
                     if (tracer.start < wall.plane and wall.inside == .pos) return false;
                     new_start = @max(new_start, wall.plane);
                 }
-                perpendicular_index_offset = new_perpendicular_index_offset;
             }
 
             tracer.start = new_start;
